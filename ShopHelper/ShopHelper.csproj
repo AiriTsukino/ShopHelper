@@ -1,0 +1,14 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <AssemblyName>ShopHelper</AssemblyName>
+    <RootNamespace>ShopHelper</RootNamespace>
+    <AssemblyVersion>0.1.36.0</AssemblyVersion>
+    <Description>FFXIV shop helper for buying shop items in chosen quantities or stacks.</Description>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

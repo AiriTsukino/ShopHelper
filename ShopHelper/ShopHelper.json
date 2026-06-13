@@ -1,0 +1,17 @@
+{
+  "Author": "Airi Tsukino",
+  "Name": "ShopHelper",
+  "AssemblyVersion": "0.1.36.0",
+  "Punchline": "Buy shop items in custom quantities or stacks.",
+  "Description": "Lists items from currently open shop addons and can buy items in chosen quantities or stack-sized batches, confirming quantity and yes/no prompts.",
+  "InternalName": "ShopHelper",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "shop",
+    "buy",
+    "vendor",
+    "utility"
+  ],
+  "RepoUrl": "https://github.com/AiriTsukino/ShopHelper",
+  "IconUrl": "https://raw.githubusercontent.com/AiriTsukino/ShopHelper/main/ShopHelper/Resources/SHLogo.png"
+}
