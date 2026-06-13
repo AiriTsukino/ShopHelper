@@ -12,8 +12,8 @@
     "IsHide": false,
     "IsTestingExclusive": false,
     "IconUrl": "https://raw.githubusercontent.com/AiriTsukino/ShopHelper/main/ShopHelper/Resources/SHLogo.png",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/AiriTsukino/ShopHelper/main/ShopHelper-0.1.36.0.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/AiriTsukino/ShopHelper/main/ShopHelper-0.1.36.0.zip",
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/AiriTsukino/ShopHelper/main/ShopHelper.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/AiriTsukino/ShopHelper/main/ShopHelper.zip",
     "LastUpdate": "1781307189"
   }
 ]
