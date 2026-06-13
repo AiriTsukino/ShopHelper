@@ -19,6 +19,15 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow mainWindow;
     private readonly SettingsWindow settingsWindow;
     private bool mainWindowOpenedByShop;
+    private static readonly string[] AutoOpenShopAddonNames =
+    [
+        "Shop",
+        "ShopExchangeItem",
+        "ShopExchangeCurrency",
+        "InclusionShop",
+        "FreeShop",
+        "GrandCompanyExchange",
+    ];
 
     public Plugin(IDalamudPluginInterface pluginInterface)
     {
@@ -39,7 +48,7 @@ public sealed class Plugin : IDalamudPlugin
         DalamudServices.PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
         DalamudServices.PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
 
-        foreach (var addonName in new[] { "Shop", "ShopExchangeItem", "ShopExchangeCurrency", "InclusionShop", "FreeShop", "GrandCompanySupplyList" })
+        foreach (var addonName in AutoOpenShopAddonNames)
             DalamudServices.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, addonName, OnShopAddonSetup);
 
         persistence.SaveNow();
@@ -103,7 +112,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         persistence.SaveNow();
-        foreach (var addonName in new[] { "Shop", "ShopExchangeItem", "ShopExchangeCurrency", "InclusionShop", "FreeShop", "GrandCompanySupplyList" })
+        foreach (var addonName in AutoOpenShopAddonNames)
             DalamudServices.AddonLifecycle.UnregisterListener(AddonEvent.PostSetup, addonName, OnShopAddonSetup);
 
         DalamudServices.PluginInterface.UiBuilder.Draw -= DrawUi;

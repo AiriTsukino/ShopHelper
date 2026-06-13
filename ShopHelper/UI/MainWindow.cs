@@ -15,6 +15,7 @@ internal sealed class MainWindow : Window
     private readonly Action openSettings;
     private readonly Dictionary<string, int> quantities = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> stackModes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> automaticQuantities = new(StringComparer.OrdinalIgnoreCase);
     private PurchaseConfirmation? pendingConfirmation;
     private bool openConfirmationPopup;
     private string debugDump = "Click Refresh Debug Dump while the problematic shop tab is open, then copy or write it to /xllog.";
@@ -131,17 +132,26 @@ internal sealed class MainWindow : Window
         foreach (var item in items)
         {
             var key = ItemKey(item);
-            if (!quantities.ContainsKey(key)) quantities[key] = item.CanSelectQuantity ? (stackModes.TryGetValue(key, out var stacks) && stacks ? config.DefaultStacks : config.DefaultQuantity) : 1;
             if (!stackModes.ContainsKey(key)) stackModes[key] = false;
+
+            if (!quantities.ContainsKey(key))
+            {
+                quantities[key] = GetSuggestedDefaultQuantity(item, item.CanSelectQuantity && stackModes[key]);
+                automaticQuantities.Add(key);
+            }
 
             if (!item.CanSelectQuantity)
             {
                 stackModes[key] = false;
                 quantities[key] = 1;
+                automaticQuantities.Add(key);
             }
 
-            var quantity = quantities[key];
             var stackMode = item.CanSelectQuantity && stackModes[key];
+            if (automaticQuantities.Contains(key))
+                quantities[key] = GetSuggestedDefaultQuantity(item, stackMode);
+
+            var quantity = quantities[key];
             var total = item.CanSelectQuantity ? (stackMode ? quantity * config.StackSize : quantity) : 1;
             var totalCost = item.Price.HasValue ? (long)item.Price.Value * total : (long?)null;
             var available = shopService.CurrentCurrencyAmount;
@@ -167,7 +177,8 @@ internal sealed class MainWindow : Window
                 if (ImGui.Checkbox(modeLabel, ref stackMode))
                 {
                     stackModes[key] = stackMode;
-                    quantities[key] = stackMode ? config.DefaultStacks : config.DefaultQuantity;
+                    quantities[key] = GetSuggestedDefaultQuantity(item, stackMode);
+                    automaticQuantities.Add(key);
                 }
             }
             ShopHelperTheme.PopHighContrastInput();
@@ -184,6 +195,7 @@ internal sealed class MainWindow : Window
                 {
                     quantity = item.CanSelectQuantity ? (stackMode ? Math.Clamp(quantity, 1, 100) : Math.Clamp(quantity, 1, 9999)) : 1;
                     quantities[key] = quantity;
+                    automaticQuantities.Remove(key);
                 }
             }
             ShopHelperTheme.PopHighContrastInput();
@@ -292,6 +304,29 @@ internal sealed class MainWindow : Window
         }
 
         ImGui.EndPopup();
+    }
+
+
+    private int GetSuggestedDefaultQuantity(ShopItemEntry item, bool stackMode)
+    {
+        if (!item.CanSelectQuantity)
+            return 1;
+
+        var configuredDefault = stackMode ? config.DefaultStacks : Math.Min(config.DefaultQuantity, 99);
+        var maxAllowed = stackMode ? 100 : 9999;
+        var suggested = Math.Clamp(configuredDefault, 1, maxAllowed);
+
+        if (item.Price is > 0 && shopService.CurrentCurrencyAmount is int availableAmount)
+        {
+            var costPerEnteredAmount = (long)item.Price.Value * (stackMode ? config.StackSize : 1);
+            if (costPerEnteredAmount > 0)
+            {
+                var affordable = (int)Math.Clamp(availableAmount / costPerEnteredAmount, 0, maxAllowed);
+                suggested = Math.Min(suggested, Math.Max(1, affordable));
+            }
+        }
+
+        return Math.Clamp(suggested, 1, maxAllowed);
     }
 
     private static string ItemKey(ShopItemEntry item) => $"{item.AddonName}:{item.RowIndex}:{item.Name}";

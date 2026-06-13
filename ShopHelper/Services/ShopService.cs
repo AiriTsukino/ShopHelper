@@ -20,7 +20,7 @@ internal sealed unsafe class ShopService : IDisposable
         "ShopExchangeCurrency",
         "InclusionShop",
         "FreeShop",
-        "GrandCompanySupplyList",
+        "GrandCompanyExchange",
     ];
 
     // These callback shapes are the only part that may need adjustment after a game/UI change.
@@ -203,6 +203,26 @@ internal sealed unsafe class ShopService : IDisposable
             currentCurrencyAmount = null;
             status = pending is null
                 ? $"{addonName} is open, but no active shop category/subcategory is selected."
+                : status;
+            return Array.Empty<ShopItemEntry>();
+        }
+
+        if (string.Equals(addonName, "GrandCompanyExchange", StringComparison.Ordinal))
+        {
+            // Grand Company seal exchange looks like an exchange shop, but the visible text
+            // nodes only expose headers/rank messages while the actual rows live in AtkValues
+            // as one item-name block followed by one same-length seal-cost block. Do not fall
+            // through to the generic visible-text parser here, because it can turn rank/status
+            // labels such as "You are not a member..." into fake purchasable rows.
+            var grandCompanyRows = TryReadRowsFromAtkValues(addonName, addon, textFragments);
+            if (grandCompanyRows.Count > 0)
+            {
+                status = pending is null ? $"Detected {grandCompanyRows.Count} shop item row(s) from {addonName} addon values." : status;
+                return grandCompanyRows;
+            }
+
+            status = pending is null
+                ? $"{addonName} is open, but no seal exchange item rows were readable yet."
                 : status;
             return Array.Empty<ShopItemEntry>();
         }
@@ -657,6 +677,14 @@ internal sealed unsafe class ShopService : IDisposable
             return TryReadRowsFromInclusionShopValues(addonName, values, visibleText);
         }
 
+        if (string.Equals(addonName, "GrandCompanyExchange", StringComparison.Ordinal))
+        {
+            // GrandCompanyExchange also needs a dedicated parser. Its AtkValues contain
+            // rank/status text and rank-tab labels in addition to purchasable rows, so the
+            // generic exchange parser can pick those non-row strings.
+            return TryReadRowsFromGrandCompanyExchangeValues(addonName, values);
+        }
+
         var stringValues = values
             .Where(x => x.Number is null)
             .Select(x => x with { Text = CleanShopText(x.Text) })
@@ -793,6 +821,74 @@ internal sealed unsafe class ShopService : IDisposable
     }
 
 
+
+    private static List<ShopItemEntry> TryReadRowsFromGrandCompanyExchangeValues(string addonName, IReadOnlyList<AddonValueFragment> values)
+    {
+        // Grand Company Seal Exchange dump layout:
+        //   item-name link block -> same-length seal price block -> other rank/stock/item-id blocks.
+        // The visible text nodes only contain headers and current rank/status messages, so this
+        // parser deliberately ignores visible text for row names.
+        var itemRuns = new List<List<AddonValueFragment>>();
+        var current = new List<AddonValueFragment>();
+        var previousIndex = -1000;
+
+        foreach (var value in values.Where(x => x.Number is null).OrderBy(x => x.Index))
+        {
+            var cleaned = CleanShopText(value.Text);
+            var isItem = IsKnownItemName(cleaned);
+            if (!isItem)
+            {
+                if (current.Count > 0)
+                    itemRuns.Add(current);
+
+                current = [];
+                previousIndex = -1000;
+                continue;
+            }
+
+            if (current.Count == 0 || value.Index == previousIndex + 1)
+                current.Add(value with { Text = cleaned });
+            else
+            {
+                itemRuns.Add(current);
+                current = [value with { Text = cleaned }];
+            }
+
+            previousIndex = value.Index;
+        }
+
+        if (current.Count > 0)
+            itemRuns.Add(current);
+
+        // Use the longest real item-name run. Single strings elsewhere in the addon can be
+        // rank names or helper text; the actual exchange rows are a block.
+        var items = itemRuns
+            .Where(x => x.Count >= 2)
+            .OrderByDescending(x => x.Count)
+            .ThenBy(x => x[0].Index)
+            .FirstOrDefault();
+        if (items is null || items.Count == 0)
+            return [];
+
+        var prices = BuildOrderedShopPriceNumberBlock(values, items);
+        var rows = new List<ShopItemEntry>(items.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var price = i < prices.Count ? prices[i] : 0;
+            rows.Add(new ShopItemEntry
+            {
+                AddonName = addonName,
+                UnitName = GetDefaultUnitName(addonName),
+                RowIndex = i,
+                Name = items[i].Text,
+                Price = price > 0 ? price : null,
+                CanSelectQuantity = TryGetItemStackable(items[i].Text),
+            });
+        }
+
+        return rows;
+    }
+
     private static List<ShopItemEntry> TryReadRowsFromInclusionShopValues(string addonName, IReadOnlyList<AddonValueFragment> values, IReadOnlyList<TextFragment> visibleText)
     {
         // InclusionShop (scrip exchange) does not expose the current rows as simple text/list
@@ -862,7 +958,11 @@ internal sealed unsafe class ShopService : IDisposable
                     RowIndex = rowIndex,
                     Name = name,
                     Price = price > 0 ? price : null,
-                    CanSelectQuantity = false,
+                    // InclusionShop rows do not expose a simple per-row quantity-control flag
+                    // in the passive row table. Use the Item sheet stackability so stackable
+                    // scrip/exchange items can use quantity defaults while gear/books remain
+                    // one-at-a-time.
+                    CanSelectQuantity = TryGetItemStackable(name),
                 });
             }
 
@@ -1255,15 +1355,22 @@ internal sealed unsafe class ShopService : IDisposable
 
     private static int? TryReadCurrentCurrencyAmount(IReadOnlyList<TextFragment> fragments)
     {
+        if (fragments.Count == 0)
+            return null;
+
         var numeric = fragments
             .Select(x => x with { Text = CleanShopText(x.Text) })
-            .Where(x => TryParsePositiveOrZeroInt(x.Text, out _))
             .Select(x => new
             {
                 Fragment = x,
-                Value = TryParsePositiveOrZeroInt(x.Text, out var value) ? value : 0,
+                Value = TryParseShopCurrencyAmount(x.Text),
             })
-            .Where(x => x.Value > 0)
+            .Where(x => x.Value is > 0)
+            .Select(x => new
+            {
+                x.Fragment,
+                Value = x.Value!.Value,
+            })
             .ToList();
 
         if (numeric.Count == 0)
@@ -1274,10 +1381,10 @@ internal sealed unsafe class ShopService : IDisposable
         var minY = fragments.Min(x => x.Y);
         var width = Math.Max(1f, maxX - minX);
 
-        // The player's spendable currency amount is rendered in the title/top-right area of
-        // shop windows. Row prices live much lower in the list. Prefer a positive numeric
-        // node in that upper-right band so this stays generic for gil, Cosmocredits, scrips,
-        // seals, and other shop-specific currencies.
+        // The player's spendable amount is rendered in the title/top-right band of shop windows.
+        // Some windows show it as "current/cap" (for example Grand Company seals), so parse the
+        // first positive number from that top-right text instead of requiring the full text to be
+        // only a plain number.
         var topRight = numeric
             .Where(x => x.Fragment.Y <= minY + 90f && x.Fragment.X >= minX + (width * 0.45f))
             .OrderBy(x => x.Fragment.Y)
@@ -1285,6 +1392,26 @@ internal sealed unsafe class ShopService : IDisposable
             .FirstOrDefault();
         if (topRight is not null)
             return topRight.Value;
+
+        return null;
+    }
+
+    private static int? TryParseShopCurrencyAmount(string text)
+    {
+        text = CleanShopText(text);
+        if (TryParsePositiveOrZeroInt(text, out var direct) && direct > 0)
+            return direct;
+
+        // Handle balances shown as "10,987/50,000" or "10,987 / 50,000" by taking the
+        // current amount before the slash. This is intentionally only for top-right currency
+        // scanning; price parsing still uses stricter row/block-specific logic elsewhere.
+        var slashIndex = text.IndexOf('/');
+        if (slashIndex > 0)
+        {
+            var leading = text[..slashIndex].Trim();
+            if (TryParsePositiveOrZeroInt(leading, out var fromSlash) && fromSlash > 0)
+                return fromSlash;
+        }
 
         return null;
     }
@@ -1338,6 +1465,9 @@ internal sealed unsafe class ShopService : IDisposable
     {
         if (string.Equals(addonName, "Shop", StringComparison.Ordinal))
             return "Gil";
+
+        if (string.Equals(addonName, "GrandCompanyExchange", StringComparison.Ordinal))
+            return "Seals";
 
         if (addonName.Contains("Exchange", StringComparison.OrdinalIgnoreCase))
             return "Currency";
@@ -2014,7 +2144,8 @@ internal sealed unsafe class ShopService : IDisposable
         var cleaned = Regex.Replace(text, @"\s+", " ").Trim();
         var lookedLikeItemLink = cleaned.Contains('&')
                                  || cleaned.StartsWith("H=", StringComparison.Ordinal)
-                                 || cleaned.Contains("%I=", StringComparison.Ordinal);
+                                 || cleaned.Contains("%I=", StringComparison.Ordinal)
+                                 || (cleaned.StartsWith("H", StringComparison.Ordinal) && cleaned.Contains('('));
 
         // Raw SeString item links from AtkComponentList labels may arrive as strings like:
         //   H=%I=&Grade 1 Dark Matter|H
@@ -2027,6 +2158,17 @@ internal sealed unsafe class ShopService : IDisposable
             if (ampIndex >= 0 && ampIndex + 1 < cleaned.Length)
                 cleaned = cleaned[(ampIndex + 1)..].Trim();
         }
+
+        // Some Grand Company exchange labels arrive as H<control bytes>I<control bytes>(Item NameIH
+        // rather than the more common H=%I=&Item Name|H form. Strip the link prefix by taking
+        // the text after the last opening parenthesis before control/private glyph cleanup.
+        if (lookedLikeItemLink && cleaned.StartsWith("H", StringComparison.Ordinal) && cleaned.Contains('('))
+        {
+            var parenIndex = cleaned.LastIndexOf('(');
+            if (parenIndex >= 0 && parenIndex + 1 < cleaned.Length)
+                cleaned = cleaned[(parenIndex + 1)..].Trim();
+        }
+
         cleaned = Regex.Replace(cleaned, @"^H=[^&]*&", string.Empty).Trim();
 
         cleaned = new string(cleaned
@@ -2128,7 +2270,8 @@ internal sealed unsafe class ShopService : IDisposable
         DalamudServices.Log.Verbose("ShopHelper selecting {AddonName} row {RowIndex} with quantity {Quantity}; callback attempt {Attempt}.", addonName, rowIndex, clampedQuantity, callbackAttempt);
 
         if (string.Equals(addonName, "ShopExchangeCurrency", StringComparison.Ordinal)
-            || string.Equals(addonName, "ShopExchangeItem", StringComparison.Ordinal))
+            || string.Equals(addonName, "ShopExchangeItem", StringComparison.Ordinal)
+            || string.Equals(addonName, "GrandCompanyExchange", StringComparison.Ordinal))
         {
             // Different exchange/special-shop addons use different callback payloads across
             // categories and patches. Cycle conservative known shapes until the game opens
