@@ -133,6 +133,7 @@ internal sealed unsafe class ShopService : IDisposable
             var completedThisPurchase = Math.Max(1, pending.LastRequestedQuantity);
             pending.Completed += Math.Min(completedThisPurchase, pending.Remaining);
             pending.LastRequestedQuantity = 0;
+            pending.CallbackAttempt = 0;
 
             if (pending.Remaining <= 0)
             {
