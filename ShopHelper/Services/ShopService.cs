@@ -29,7 +29,10 @@ internal sealed unsafe class ShopService : IDisposable
     private const int QuantityOkCallback = 0;
     private const int ShopSelectCallback = 0;
     private const int MaxSinglePurchase = 99;
-    private static readonly TimeSpan ActionDelay = TimeSpan.FromMilliseconds(280);
+    private static readonly TimeSpan ActionDelay = TimeSpan.FromMilliseconds(180);
+    private static readonly TimeSpan CallbackResponseTimeout = TimeSpan.FromMilliseconds(2500);
+    private static readonly TimeSpan PostConfirmDelay = TimeSpan.FromMilliseconds(650);
+    private static readonly Dictionary<string, int> PreferredCallbackAttempts = new(StringComparer.Ordinal);
 
     private readonly Configuration config;
     private DateTime nextActionUtc = DateTime.MinValue;
@@ -133,27 +136,66 @@ internal sealed unsafe class ShopService : IDisposable
             var completedThisPurchase = Math.Max(1, pending.LastRequestedQuantity);
             pending.Completed += Math.Min(completedThisPurchase, pending.Remaining);
             pending.LastRequestedQuantity = 0;
+            pending.WaitingForQuantityDialog = false;
+            pending.WaitingForYesNo = false;
+            pending.WaitStartedUtc = null;
             pending.CallbackAttempt = 0;
+
+            if (pending.LastCallbackAttemptUsed.HasValue)
+                PreferredCallbackAttempts[pending.AddonName] = pending.LastCallbackAttemptUsed.Value % 7;
 
             if (pending.Remaining <= 0)
             {
                 status = $"Finished queue for {pending.ItemName}.";
                 pending = null;
+                return;
             }
 
+            // Give the game/server a short moment to finish the accepted transaction before
+            // firing the next row callback. Without this, long one-at-a-time queues can race
+            // the shop UI and eventually time out or fail.
+            nextActionUtc = DateTime.UtcNow.Add(PostConfirmDelay);
             return;
         }
 
+        var now = DateTime.UtcNow;
         var chunk = pending.UsesQuantityDialog ? Math.Min(MaxSinglePurchase, pending.Remaining) : 1;
+
         if (pending.UsesQuantityDialog && TryConfirmQuantity(chunk))
         {
             // Do not count this as completed until the normal game confirmation is accepted.
             pending.LastRequestedQuantity = chunk;
+            pending.WaitingForQuantityDialog = false;
+            pending.WaitingForYesNo = true;
+            pending.WaitStartedUtc = now;
+            nextActionUtc = now.Add(ActionDelay);
             return;
         }
 
+        if (pending.WaitingForQuantityDialog || pending.WaitingForYesNo)
+        {
+            var waitStarted = pending.WaitStartedUtc ?? now;
+            if (now - waitStarted < CallbackResponseTimeout)
+            {
+                nextActionUtc = now.Add(ActionDelay);
+                return;
+            }
+
+            // The previous callback shape did not produce the expected game window. Try the
+            // next known callback shape instead of incrementing attempts every frame while
+            // the UI is still responding.
+            pending.WaitingForQuantityDialog = false;
+            pending.WaitingForYesNo = false;
+            pending.WaitStartedUtc = null;
+        }
+
         pending.LastRequestedQuantity = chunk;
-        SelectShopRow(pending.AddonName, shopAddon, pending.RowIndex, chunk, pending.CallbackAttempt++);
+        var callbackAttempt = GetCallbackAttemptToTry(pending.AddonName, pending.CallbackAttempt++);
+        pending.LastCallbackAttemptUsed = callbackAttempt;
+        SelectShopRow(pending.AddonName, shopAddon, pending.RowIndex, chunk, callbackAttempt);
+        pending.WaitStartedUtc = now;
+        pending.WaitingForQuantityDialog = pending.UsesQuantityDialog;
+        pending.WaitingForYesNo = !pending.UsesQuantityDialog;
 
         if (pending.CallbackAttempt > 24)
         {
@@ -2232,6 +2274,19 @@ internal sealed unsafe class ShopService : IDisposable
         return true;
     }
 
+    private static int GetCallbackAttemptToTry(string addonName, int attemptIndex)
+    {
+        if (!PreferredCallbackAttempts.TryGetValue(addonName, out var preferredAttempt))
+            return attemptIndex;
+
+        preferredAttempt = Math.Clamp(preferredAttempt, 0, 6);
+        if (attemptIndex == 0)
+            return preferredAttempt;
+
+        var candidate = attemptIndex - 1;
+        return candidate >= preferredAttempt ? candidate + 1 : candidate;
+    }
+
     private bool TryClickYesNo()
     {
         var ptr = DalamudServices.GameGui.GetAddonByName("SelectYesno");
@@ -2470,6 +2525,10 @@ internal sealed unsafe class ShopService : IDisposable
         public int Completed { get; set; }
         public int LastRequestedQuantity { get; set; }
         public int CallbackAttempt { get; set; }
+        public int? LastCallbackAttemptUsed { get; set; }
+        public bool WaitingForQuantityDialog { get; set; }
+        public bool WaitingForYesNo { get; set; }
+        public DateTime? WaitStartedUtc { get; set; }
         public int Remaining => Total - Completed;
     }
 }
